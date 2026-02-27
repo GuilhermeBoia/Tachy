@@ -16,35 +16,11 @@ struct TachyApp: App {
 
 /// Wrapper view that adds resize cursor rects at the edges of a borderless window.
 class ResizableContentView: NSView {
-    private let edgeThickness: CGFloat = 6
-
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        let b = bounds
-
-        // Corners (8x8)
-        let cs: CGFloat = 8
-        // Bottom-left
-        addCursorRect(NSRect(x: 0, y: 0, width: cs, height: cs), cursor: .crosshair)
-        // Bottom-right
-        addCursorRect(NSRect(x: b.maxX - cs, y: 0, width: cs, height: cs), cursor: .crosshair)
-        // Top-left
-        addCursorRect(NSRect(x: 0, y: b.maxY - cs, width: cs, height: cs), cursor: .crosshair)
-        // Top-right
-        addCursorRect(NSRect(x: b.maxX - cs, y: b.maxY - cs, width: cs, height: cs), cursor: .crosshair)
-
-        // Left edge
-        addCursorRect(NSRect(x: 0, y: cs, width: edgeThickness, height: b.height - 2 * cs), cursor: .resizeLeftRight)
-        // Right edge
-        addCursorRect(NSRect(x: b.maxX - edgeThickness, y: cs, width: edgeThickness, height: b.height - 2 * cs), cursor: .resizeLeftRight)
-        // Bottom edge
-        addCursorRect(NSRect(x: cs, y: 0, width: b.width - 2 * cs, height: edgeThickness), cursor: .resizeUpDown)
-        // Top edge
-        addCursorRect(NSRect(x: cs, y: b.maxY - edgeThickness, width: b.width - 2 * cs, height: edgeThickness), cursor: .resizeUpDown)
-    }
 }
 
 class FloatingPanel: NSPanel {
+    private let edgeThickness: CGFloat = 6
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
@@ -66,6 +42,7 @@ class FloatingPanel: NSPanel {
         wrapper.addSubview(hostingView)
         self.contentView = wrapper
 
+        acceptsMouseMovedEvents = true
         isFloatingPanel = true
         level = .floating
         isOpaque = false
@@ -77,6 +54,38 @@ class FloatingPanel: NSPanel {
         isMovableByWindowBackground = true
         minSize = NSSize(width: 320, height: 280)
         maxSize = NSSize(width: 800, height: 1200)
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        var shouldUpdateCursor = false
+        switch event.type {
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .cursorUpdate:
+            shouldUpdateCursor = true
+        default:
+            break
+        }
+        super.sendEvent(event)
+        if shouldUpdateCursor {
+            updateResizeCursor(at: event.locationInWindow)
+        }
+    }
+
+    private func updateResizeCursor(at point: NSPoint) {
+        let rect = NSRect(origin: .zero, size: frame.size)
+        guard rect.contains(point) else { return }
+
+        let left = point.x <= edgeThickness
+        let right = point.x >= rect.maxX - edgeThickness
+        let bottom = point.y <= edgeThickness
+        let top = point.y >= rect.maxY - edgeThickness
+
+        if left || right {
+            NSCursor.resizeLeftRight.set()
+        } else if top || bottom {
+            NSCursor.resizeUpDown.set()
+        } else {
+            NSCursor.arrow.set()
+        }
     }
 }
 
@@ -107,7 +116,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         setupFloatingPanel()
-        checkAccessibilityPermission()
         registerDoubleTapCtrl()
         registerEscapeMonitor()
 
@@ -128,16 +136,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         floatingPanel = FloatingPanel(hostingView: hostingView)
         positionPanel()
-
-        // Close when clicking outside (unless recording)
-        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
-            guard let self = self, self.floatingPanel.isVisible else { return }
-            let isRecording = self.dictationManager.state == .recording ||
-                              self.dictationManager.state == .liveTranscribing
-            if !isRecording {
-                self.floatingPanel.orderOut(nil)
-            }
-        }
     }
 
     private func positionPanel() {
@@ -152,30 +150,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Accessibility Permission
 
     func checkAccessibilityPermission() {
-        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        if !trusted {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                self?.showAccessibilityAlert()
-            }
-        }
-    }
-
-    private func showAccessibilityAlert() {
-        guard !AXIsProcessTrusted() else { return }
-        let alert = NSAlert()
-        alert.messageText = "Permissão de Acessibilidade Necessária"
-        alert.informativeText = "Tachy precisa de permissão de Acessibilidade para capturar atalhos globais e colar texto. Adicione o app em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Abrir Ajustes")
-        alert.addButton(withTitle: "Depois")
-
-        NSApp.activate(ignoringOtherApps: true)
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-            NSWorkspace.shared.open(url)
-        }
+        // Silent check on launch: do not interrupt the user with permission prompts/alerts.
+        _ = AXIsProcessTrusted()
     }
 
     // MARK: - Icon State

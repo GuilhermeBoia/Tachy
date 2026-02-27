@@ -13,10 +13,49 @@ enum DictationState {
 }
 
 enum RefinementLevel: String, CaseIterable, Codable {
-    case none = "Sem refinamento"
-    case light = "Leve (pontuação e clareza)"
-    case moderate = "Moderado (reescrita leve)"
-    case prompt = "Prompt técnico"
+    case none = "none"
+    case refine = "refine"
+    case prompt = "prompt"
+
+    var displayName: String {
+        switch self {
+        case .none:
+            return "Sem refinamento"
+        case .refine:
+            return "Refinamento"
+        case .prompt:
+            return "Prompt técnico"
+        }
+    }
+
+    // Backward compatibility with old stored labels/cases.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if let mapped = Self.fromStoredValue(value) {
+            self = mapped
+        } else {
+            self = .refine
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    static func fromStoredValue(_ value: String) -> RefinementLevel? {
+        switch value {
+        case "none", "Sem refinamento":
+            return RefinementLevel.none
+        case "refine", "Refinamento", "Leve (pontuação e clareza)", "Moderado (reescrita leve)":
+            return .refine
+        case "prompt", "Prompt técnico":
+            return .prompt
+        default:
+            return nil
+        }
+    }
 }
 
 class DictationManager: ObservableObject {
@@ -24,7 +63,7 @@ class DictationManager: ObservableObject {
     @Published var lastTranscription: String = ""
     @Published var lastRefined: String = ""
     @Published var isEnabled: Bool = true
-    @Published var refinementLevel: RefinementLevel = .light
+    @Published var refinementLevel: RefinementLevel = .refine
     @Published var showNotifications: Bool = true
     @Published var autoPaste: Bool = true
     @Published var useLiveTranscription: Bool = true
@@ -37,7 +76,7 @@ class DictationManager: ObservableObject {
 
     private let audioRecorder = AudioRecorder()
     private let whisperService = WhisperService()
-    private let claudeService = ClaudeService()
+    private let refinementService = RefinementService()
     private let settingsManager = SettingsManager.shared
     private let realtimeService = RealtimeTranscriptionService()
     private let liveTextInserter = LiveTextInserter()
@@ -196,7 +235,7 @@ class DictationManager: ObservableObject {
 
             Task {
                 do {
-                    let refined = try await claudeService.refine(text: liveText, level: refinementLevel)
+                    let refined = try await refinementService.refine(text: liveText, level: refinementLevel)
 
                     await MainActor.run {
                         self.lastRefined = refined
@@ -269,7 +308,7 @@ class DictationManager: ObservableObject {
                 let finalText: String
                 if refinementLevel != .none {
                     await MainActor.run { self.setState(.refining) }
-                    finalText = try await claudeService.refine(text: transcription, level: refinementLevel)
+                    finalText = try await refinementService.refine(text: transcription, level: refinementLevel)
                 } else {
                     finalText = transcription
                 }

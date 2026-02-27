@@ -14,17 +14,12 @@ class SettingsManager {
         set { setKeychainValue(key: "openai_api_key", value: newValue) }
     }
 
-    var anthropicKey: String {
-        get { getKeychainValue(key: "anthropic_api_key") ?? "" }
-        set { setKeychainValue(key: "anthropic_api_key", value: newValue) }
-    }
-
     // MARK: - Settings (stored in UserDefaults)
 
     var refinementLevel: RefinementLevel? {
         get {
             guard let raw = defaults.string(forKey: "refinement_level") else { return nil }
-            return RefinementLevel(rawValue: raw)
+            return RefinementLevel.fromStoredValue(raw)
         }
         set { defaults.set(newValue?.rawValue, forKey: "refinement_level") }
     }

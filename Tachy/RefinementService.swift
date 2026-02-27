@@ -1,28 +1,27 @@
 import Foundation
 
-class ClaudeService {
-    private let apiURL = URL(string: "https://api.anthropic.com/v1/messages")!
+class RefinementService {
+    private let apiURL = URL(string: "https://api.openai.com/v1/chat/completions")!
+    private let model = "gpt-4o-mini"
 
     func refine(text: String, level: RefinementLevel) async throws -> String {
-        let apiKey = SettingsManager.shared.anthropicKey
+        let apiKey = SettingsManager.shared.openAIKey
         guard !apiKey.isEmpty else {
-            throw DictationError.missingAPIKey("Anthropic API key não configurada")
+            throw DictationError.missingAPIKey("OpenAI API key não configurada")
         }
-
-        let systemPrompt = buildSystemPrompt(for: level)
 
         var request = URLRequest(url: apiURL)
         request.httpMethod = "POST"
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
 
         let payload: [String: Any] = [
-            "model": "claude-sonnet-4-20250514",
-            "max_tokens": 4096,
-            "system": systemPrompt,
+            "model": model,
+            "temperature": 0.2,
+            "max_completion_tokens": 700,
             "messages": [
+                ["role": "system", "content": buildSystemPrompt(for: level)],
                 ["role": "user", "content": text]
             ]
         ]
@@ -37,11 +36,12 @@ class ClaudeService {
 
         guard httpResponse.statusCode == 200 else {
             let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw DictationError.apiError("Claude API error (\(httpResponse.statusCode)): \(errorBody)")
+            throw DictationError.apiError("OpenAI refinement error (\(httpResponse.statusCode)): \(errorBody)")
         }
 
-        let result = try JSONDecoder().decode(ClaudeResponse.self, from: data)
-        return result.content.first?.text ?? text
+        let result = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
+        let content = result.choices.first?.message.content?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return content?.isEmpty == false ? content! : text
     }
 
     private func buildSystemPrompt(for level: RefinementLevel) -> String {
@@ -52,57 +52,48 @@ class ClaudeService {
         - NUNCA adicione conteúdo novo. Apenas refine o que foi ditado.
         - Preserve EXATAMENTE o idioma usado em cada trecho. Se o usuário falou em inglês, mantenha em inglês. Se falou em português, mantenha em português.
         - Preserve termos técnicos exatamente como falados (API, endpoint, React, useState, etc.)
+        - Remova marcas de fala e hesitações sem mudar significado (ex.: "é...", "tipo", "hum", "ahn", "vamos lá", "certo?").
         - Retorne APENAS o texto refinado, sem explicações, comentários ou markdown.
         """
 
         switch level {
         case .none:
-            return "" // Won't be called
+            return ""
 
-        case .light:
+        case .refine:
             return base + """
 
-            NÍVEL: Refinamento leve
-            - Adicione pontuação correta (vírgulas, pontos, interrogações, etc.)
-            - Corrija erros claros de transcrição
-            - Mantenha o estilo e vocabulário original do falante
-            - Não reescreva frases, apenas corrija pontuação e erros óbvios
-            """
-
-        case .moderate:
-            return base + """
-
-            NÍVEL: Refinamento moderado
-            - Adicione pontuação correta
-            - Corrija erros de transcrição
-            - Melhore levemente a clareza e fluidez do texto
-            - Reorganize frases confusas mantendo o significado original
-            - Remova repetições e hesitações ("é... tipo... então...")
-            - Mantenha o tom e estilo do falante
+            NÍVEL: Refinamento
+            - Foque em fluidez e limpeza de fala natural.
+            - Remova repetições, cacoetes e conectores desnecessários.
+            - Reestruture frases confusas para leitura clara, mantendo o significado original.
+            - Se houver enumeração verbal ("ponto um", "primeiro", "segundo", etc.), converta para lista numerada (1., 2., 3.).
+            - Preserve intenção, fatos e requisitos técnicos.
             """
 
         case .prompt:
             return base + """
 
             NÍVEL: Formatação como prompt técnico
-            - Adicione pontuação e corrija erros
-            - Estruture o texto como um prompt claro e eficaz
-            - Use formatação adequada (listas se necessário)
+            - Estruture o texto final como um prompt claro para IA.
+            - Organize em blocos curtos: Contexto, Objetivo, Requisitos, Restrições, Saída esperada.
+            - Use listas numeradas quando houver múltiplos itens.
             - Preserve todos os requisitos técnicos mencionados
-            - Torne as instruções mais precisas e acionáveis
+            - Torne as instruções precisas e acionáveis
             - Mantenha os idiomas originais usados
             """
         }
     }
 }
 
-// MARK: - Response types
-
-struct ClaudeResponse: Codable {
-    let content: [ClaudeContent]
+private struct OpenAIChatResponse: Codable {
+    let choices: [OpenAIChoice]
 }
 
-struct ClaudeContent: Codable {
-    let type: String
-    let text: String
+private struct OpenAIChoice: Codable {
+    let message: OpenAIMessage
+}
+
+private struct OpenAIMessage: Codable {
+    let content: String?
 }

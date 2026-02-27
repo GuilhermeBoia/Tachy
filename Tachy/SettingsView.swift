@@ -4,9 +4,7 @@ import ServiceManagement
 struct SettingsView: View {
     @EnvironmentObject var dictationManager: DictationManager
     @State private var openAIKey: String = ""
-    @State private var anthropicKey: String = ""
     @State private var showOpenAIKey: Bool = false
-    @State private var showAnthropicKey: Bool = false
     @State private var savedMessage: String? = nil
     @State private var launchAtLogin: Bool = false
 
@@ -32,7 +30,6 @@ struct SettingsView: View {
         .frame(width: 480, height: 400)
         .onAppear {
             openAIKey = settings.openAIKey
-            anthropicKey = settings.anthropicKey
             launchAtLogin = settings.launchAtLogin
         }
     }
@@ -44,7 +41,7 @@ struct SettingsView: View {
             Section("Comportamento") {
                 Picker("Nível de refinamento:", selection: $dictationManager.refinementLevel) {
                     ForEach(RefinementLevel.allCases, id: \.self) { level in
-                        Text(level.rawValue).tag(level)
+                        Text(level.displayName).tag(level)
                     }
                 }
 
@@ -110,7 +107,7 @@ struct SettingsView: View {
 
     private var apiKeysTab: some View {
         Form {
-            Section("OpenAI (Whisper + Realtime)") {
+            Section("OpenAI (Whisper + Realtime + GPT)") {
                 HStack {
                     if showOpenAIKey {
                         TextField("sk-...", text: $openAIKey)
@@ -124,26 +121,7 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Text("Usada para transcrição de voz (Whisper API e Realtime API)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Section("Anthropic (Claude)") {
-                HStack {
-                    if showAnthropicKey {
-                        TextField("sk-ant-...", text: $anthropicKey)
-                            .textFieldStyle(.roundedBorder)
-                    } else {
-                        SecureField("sk-ant-...", text: $anthropicKey)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    Button(action: { showAnthropicKey.toggle() }) {
-                        Image(systemName: showAnthropicKey ? "eye.slash" : "eye")
-                    }
-                    .buttonStyle(.plain)
-                }
-                Text("Usada para refinamento de texto via Claude API")
+                Text("Usada para transcrição de voz e refinamento de texto (Whisper, Realtime e GPT)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -151,7 +129,6 @@ struct SettingsView: View {
             Section {
                 Button("Salvar API Keys") {
                     settings.openAIKey = openAIKey
-                    settings.anthropicKey = anthropicKey
                     savedMessage = "API Keys salvas no Keychain!"
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         savedMessage = nil
@@ -196,7 +173,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Transcrição ao vivo via OpenAI Realtime API", systemImage: "waveform")
                 Label("Whisper API como fallback batch", systemImage: "arrow.triangle.2.circlepath")
-                Label("Claude API para refinamento inteligente", systemImage: "sparkles")
+                Label("GPT para refinamento inteligente", systemImage: "sparkles")
                 Label("Cola automática no campo ativo", systemImage: "doc.on.clipboard")
                 Label("Double-tap ⌃ para gravar/parar", systemImage: "keyboard")
             }

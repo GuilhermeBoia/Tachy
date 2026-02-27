@@ -6,7 +6,7 @@ Voice dictation for macOS with live transcription and AI refinement.
 
 - **Live transcription** via OpenAI Realtime API — text appears as you speak
 - **Multilingual** — switch between Portuguese and English naturally
-- **AI refinement** via Claude — punctuation, clarity, and formatting
+- **AI refinement** via GPT — punctuation, clarity, and formatting
 - **Auto-paste** — refined text is pasted into the active field
 - **Double-tap Control** — global hotkey to start/stop recording
 - **Menubar app** — lightweight, always accessible, no dock icon
@@ -17,8 +17,7 @@ Voice dictation for macOS with live transcription and AI refinement.
 
 - macOS 13 (Ventura) or later
 - Xcode 15+ / Swift 5.9+
-- [OpenAI API key](https://platform.openai.com) (Whisper + Realtime)
-- [Anthropic API key](https://console.anthropic.com) (Claude refinement)
+- [OpenAI API key](https://platform.openai.com) (Whisper + Realtime + GPT refinement)
 
 ### Build
 
@@ -26,6 +25,13 @@ Voice dictation for macOS with live transcription and AI refinement.
 chmod +x build.sh
 ./build.sh
 open Tachy.app
+```
+
+To always open the latest version in `/Applications`:
+
+```bash
+chmod +x run.sh
+./run.sh
 ```
 
 Or with Swift Package Manager directly:
@@ -38,7 +44,7 @@ swift build -c release
 
 1. Click the waveform icon in the menubar
 2. Go to Settings
-3. Enter your OpenAI and Anthropic API keys
+3. Enter your OpenAI API key
 4. Choose your refinement level
 
 ### Permissions
@@ -59,8 +65,7 @@ On first launch, macOS will ask for:
 | Level | Description |
 |-------|-------------|
 | None | Raw Whisper transcription |
-| Light | Punctuation + transcription error correction |
-| Moderate | Light + clarity improvement + hesitation removal |
+| Refinement | Removes speech fillers, improves fluency, and structures verbal lists |
 | Technical prompt | Reformats as a structured prompt |
 
 ## Project Structure
@@ -75,7 +80,7 @@ Tachy/
     ├── DictationManager.swift
     ├── AudioRecorder.swift
     ├── WhisperService.swift
-    ├── ClaudeService.swift
+    ├── RefinementService.swift
     ├── RealtimeTranscriptionService.swift
     ├── LiveTextInserter.swift
     ├── SettingsManager.swift

@@ -99,7 +99,7 @@ struct TachyMainView: View {
             // Refinement picker inline
             Picker("", selection: $dictationManager.refinementLevel) {
                 ForEach(RefinementLevel.allCases, id: \.self) { level in
-                    Text(level.rawValue).tag(level)
+                    Text(level.displayName).tag(level)
                 }
             }
             .pickerStyle(.menu)
@@ -169,12 +169,6 @@ struct TachyMainView: View {
 
     private var liveArea: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Spacer()
-                Text("esc cancela")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.secondary.opacity(0.5))
-            }
 
             // Live text — scrollable, no line limit
             if !dictationManager.livePartialText.isEmpty {
@@ -336,7 +330,7 @@ struct TachyMainView: View {
     private var statusText: String {
         switch dictationManager.state {
         case .transcribing: return "Transcrevendo com Whisper..."
-        case .refining: return "Refinando com Claude..."
+        case .refining: return "Refinando com GPT..."
         default: return ""
         }
     }
@@ -468,9 +462,7 @@ struct TachySettingsView: View {
     @EnvironmentObject var dictationManager: DictationManager
     @Binding var currentPage: TachyPage
     @State private var openAIKey: String = ""
-    @State private var anthropicKey: String = ""
     @State private var showOpenAIKey = false
-    @State private var showAnthropicKey = false
     @State private var launchAtLogin = false
     @State private var savedMessage: String? = nil
 
@@ -519,7 +511,7 @@ struct TachySettingsView: View {
                     // API Keys
                     settingsSection("API Keys") {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("OpenAI")
+                            Text("OpenAI (Whisper + Realtime + GPT)")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(.secondary)
                             HStack(spacing: 6) {
@@ -534,29 +526,6 @@ struct TachySettingsView: View {
                                 }
                                 Button { showOpenAIKey.toggle() } label: {
                                     Image(systemName: showOpenAIKey ? "eye.slash" : "eye")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Anthropic")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(.secondary)
-                            HStack(spacing: 6) {
-                                if showAnthropicKey {
-                                    TextField("sk-ant-...", text: $anthropicKey)
-                                        .textFieldStyle(.roundedBorder)
-                                        .font(.system(size: 11, design: .monospaced))
-                                } else {
-                                    SecureField("sk-ant-...", text: $anthropicKey)
-                                        .textFieldStyle(.roundedBorder)
-                                        .font(.system(size: 11))
-                                }
-                                Button { showAnthropicKey.toggle() } label: {
-                                    Image(systemName: showAnthropicKey ? "eye.slash" : "eye")
                                         .font(.system(size: 10))
                                         .foregroundColor(.secondary)
                                 }
@@ -605,7 +574,6 @@ struct TachySettingsView: View {
         }
         .onAppear {
             openAIKey = settings.openAIKey
-            anthropicKey = settings.anthropicKey
             launchAtLogin = settings.launchAtLogin
         }
     }
@@ -632,7 +600,6 @@ struct TachySettingsView: View {
 
     private func saveAll() {
         settings.openAIKey = openAIKey
-        settings.anthropicKey = anthropicKey
         dictationManager.saveSettings()
         savedMessage = "Salvo!"
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { savedMessage = nil }

@@ -33,7 +33,7 @@ class WhisperService {
         body.appendMultipart(
             boundary: boundary,
             name: "prompt",
-            value: "Transcrição multilíngue. O falante pode alternar entre português brasileiro e inglês. Preserve code terms, technical terms, and programming keywords in their original language."
+            value: "Transcrição multilíngue. O falante pode alternar entre português brasileiro e inglês. Preserve code terms, technical terms, and programming keywords in their original language. Evite marcas de fala e hesitações (ex.: hum, ahn, tipo, é...). Retorne texto limpo e natural."
         )
 
         // Response format
