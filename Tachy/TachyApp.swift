@@ -12,37 +12,29 @@ struct TachyApp: App {
     }
 }
 
-// MARK: - Floating Panel (non-activating, resizable, stays on top)
-
-/// Wrapper view that adds resize cursor rects at the edges of a borderless window.
-class ResizableContentView: NSView {
-}
+// MARK: - Floating Panel (non-activating, compact pill)
 
 class FloatingPanel: NSPanel {
-    private let edgeThickness: CGFloat = 6
-
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
     init(hostingView: NSView) {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 420),
-            styleMask: [.nonactivatingPanel, .resizable, .fullSizeContentView, .borderless],
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 50),
+            styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
             backing: .buffered,
             defer: true
         )
 
-        // Wrap in ResizableContentView for cursor rects
-        let wrapper = ResizableContentView()
+        let wrapper = NSView()
         wrapper.wantsLayer = true
-        wrapper.layer?.cornerRadius = 12
+        wrapper.layer?.cornerRadius = 25
         wrapper.layer?.masksToBounds = true
         hostingView.frame = wrapper.bounds
         hostingView.autoresizingMask = [.width, .height]
         wrapper.addSubview(hostingView)
         self.contentView = wrapper
 
-        acceptsMouseMovedEvents = true
         isFloatingPanel = true
         level = .floating
         isOpaque = false
@@ -52,39 +44,38 @@ class FloatingPanel: NSPanel {
         hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isMovableByWindowBackground = true
-        minSize = NSSize(width: 320, height: 280)
-        maxSize = NSSize(width: 800, height: 1200)
     }
 
-    override func sendEvent(_ event: NSEvent) {
-        var shouldUpdateCursor = false
-        switch event.type {
-        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .cursorUpdate:
-            shouldUpdateCursor = true
-        default:
-            break
-        }
-        super.sendEvent(event)
-        if shouldUpdateCursor {
-            updateResizeCursor(at: event.locationInWindow)
-        }
-    }
-
-    private func updateResizeCursor(at point: NSPoint) {
-        let rect = NSRect(origin: .zero, size: frame.size)
-        guard rect.contains(point) else { return }
-
-        let left = point.x <= edgeThickness
-        let right = point.x >= rect.maxX - edgeThickness
-        let bottom = point.y <= edgeThickness
-        let top = point.y >= rect.maxY - edgeThickness
-
-        if left || right {
-            NSCursor.resizeLeftRight.set()
-        } else if top || bottom {
-            NSCursor.resizeUpDown.set()
+    func resizePanel(to size: NSSize, cornerRadius: CGFloat, animate: Bool, centerOnScreen: Bool = false) {
+        let newFrame: NSRect
+        if centerOnScreen || !isVisible {
+            guard let screen = NSScreen.main else { return }
+            let screenFrame = screen.visibleFrame
+            let x = screenFrame.midX - size.width / 2
+            let y = screenFrame.minY + 40
+            newFrame = NSRect(x: x, y: y, width: size.width, height: size.height)
         } else {
-            NSCursor.arrow.set()
+            // Keep current position, just resize anchored at bottom-left
+            let current = frame
+            let x = current.origin.x + (current.width - size.width) / 2
+            let y = current.origin.y
+            newFrame = NSRect(x: x, y: y, width: size.width, height: size.height)
+        }
+
+        if animate {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                self.animator().setFrame(newFrame, display: true)
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                self.contentView?.layer?.cornerRadius = cornerRadius
+            }
+        } else {
+            setFrame(newFrame, display: true)
+            contentView?.layer?.cornerRadius = cornerRadius
         }
     }
 }
@@ -99,10 +90,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var localFlagsMonitor: Any?
     var escapeMonitor: Any?
     var settingsWindow: NSWindow?
+    var historyWindow: NSWindow?
 
-    // Double-tap Control detection
+    // Double-tap Control detection (toggle recording)
     private var lastCtrlReleaseTime: Date?
     private var ctrlPressedAlone = true
+
+    // Double-tap Shift detection (pause/resume)
+    private var lastShiftReleaseTime: Date?
+    private var shiftPressedAlone = true
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -111,7 +107,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: "Tachy")
-            button.action = #selector(togglePanel)
+            button.action = #selector(showMenu)
             button.target = self
         }
 
@@ -119,10 +115,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         registerDoubleTapCtrl()
         registerEscapeMonitor()
 
+        // Listen for result height changes from SwiftUI
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleResultHeightChange(_:)),
+            name: Notification.Name("TachyResultHeightChanged"),
+            object: nil
+        )
+
         dictationManager.onStateChange = { [weak self] state in
             DispatchQueue.main.async {
-                self?.updateIcon(for: state)
+                guard let self = self else { return }
+                self.updateIcon(for: state)
+                self.handlePanelVisibility(for: state)
             }
+        }
+    }
+
+    // MARK: - Panel Visibility Logic
+
+    private func handlePanelVisibility(for state: DictationState) {
+        switch state {
+        case .recording, .liveTranscribing, .paused:
+            // Show pill
+            floatingPanel.resizePanel(to: NSSize(width: 300, height: 50), cornerRadius: 25, animate: floatingPanel.isVisible)
+            if !floatingPanel.isVisible {
+                floatingPanel.orderFront(nil)
+            }
+
+        case .transcribing, .refining:
+            // Keep pill visible
+            floatingPanel.resizePanel(to: NSSize(width: 300, height: 50), cornerRadius: 25, animate: true)
+            if !floatingPanel.isVisible {
+                floatingPanel.orderFront(nil)
+            }
+
+        case .idle:
+            if dictationManager.showingResult {
+                // Expand to result view
+                floatingPanel.resizePanel(to: NSSize(width: 380, height: 150), cornerRadius: 16, animate: true)
+                if !floatingPanel.isVisible {
+                    floatingPanel.orderFront(nil)
+                }
+            } else {
+                // Hide panel
+                floatingPanel.orderOut(nil)
+            }
+        }
+    }
+
+    @objc private func handleResultHeightChange(_ notification: Notification) {
+        guard let height = notification.userInfo?["height"] as? CGFloat else { return }
+        let clampedHeight = min(max(height + 20, 80), 350) // padding + clamp
+        if dictationManager.state == .idle && dictationManager.showingResult {
+            floatingPanel.resizePanel(to: NSSize(width: 380, height: clampedHeight), cornerRadius: 16, animate: true)
         }
     }
 
@@ -135,22 +181,74 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         floatingPanel = FloatingPanel(hostingView: hostingView)
-        positionPanel()
+        // Start hidden
+        floatingPanel.orderOut(nil)
     }
 
-    private func positionPanel() {
-        guard let screen = NSScreen.main else { return }
-        let screenFrame = screen.visibleFrame
-        let panelSize = floatingPanel.frame.size
-        let x = screenFrame.midX - panelSize.width / 2
-        let y = screenFrame.maxY - panelSize.height - 20
-        floatingPanel.setFrameOrigin(NSPoint(x: x, y: y))
+    // MARK: - NSMenu on Status Item
+
+    @objc func showMenu() {
+        let menu = NSMenu()
+
+        let historyItem = NSMenuItem(title: "Histórico", action: #selector(openHistory), keyEquivalent: "")
+        historyItem.target = self
+        menu.addItem(historyItem)
+
+        let settingsItem = NSMenuItem(title: "Ajustes", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(title: "Sair", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        // Reset menu so the next click triggers action again
+        DispatchQueue.main.async { [weak self] in
+            self?.statusItem.menu = nil
+        }
+    }
+
+    @objc private func openHistory() {
+        if let window = historyWindow, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let historyView = TachyHistoryView()
+            .environmentObject(dictationManager)
+            .frame(minWidth: 380, minHeight: 400)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 500),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Histórico — Tachy"
+        window.contentView = NSHostingView(rootView: historyView)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        historyWindow = window
+    }
+
+    @objc private func openSettings() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
     }
 
     // MARK: - Accessibility Permission
 
     func checkAccessibilityPermission() {
-        // Silent check on launch: do not interrupt the user with permission prompts/alerts.
         _ = AXIsProcessTrusted()
     }
 
@@ -162,20 +260,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let color: NSColor
         switch state {
         case .idle:
-            // Default template image (follows menu bar appearance)
             button.image = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: "Ready")
             button.image?.isTemplate = true
             button.contentTintColor = nil
             return
         case .recording, .liveTranscribing:
             color = .systemRed
+        case .paused:
+            color = .systemYellow
         case .transcribing:
             color = .systemOrange
         case .refining:
             color = .systemPurple
         }
 
-        // Non-template colored image for active states
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         if let img = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: nil)?
             .withSymbolConfiguration(config) {
@@ -203,9 +301,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] _ in
             self?.ctrlPressedAlone = false
+            self?.shiftPressedAlone = false
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.ctrlPressedAlone = false
+            self?.shiftPressedAlone = false
             return event
         }
     }
@@ -221,19 +321,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let ctrlPressed = event.modifierFlags.contains(.control)
-        let otherModifiers = event.modifierFlags.intersection([.shift, .option, .command, .capsLock])
+        let ctrl = event.modifierFlags.contains(.control)
+        let opt = event.modifierFlags.contains(.option)
+        let shift = event.modifierFlags.contains(.shift)
+        let cmd = event.modifierFlags.contains(.command)
+        let capsLock = event.modifierFlags.contains(.capsLock)
 
-        if ctrlPressed {
-            if otherModifiers.isEmpty {
-                ctrlPressedAlone = true
-            } else {
-                ctrlPressedAlone = false
-            }
-        } else if ctrlPressedAlone && otherModifiers.isEmpty {
+        // --- Double-tap Control (toggle recording) ---
+        let ctrlOthers = [opt, shift, cmd, capsLock].contains(true)
+        if ctrl {
+            ctrlPressedAlone = !ctrlOthers
+        } else if ctrlPressedAlone && !ctrlOthers {
             let now = Date()
-            if let lastRelease = lastCtrlReleaseTime,
-               now.timeIntervalSince(lastRelease) < 0.4 {
+            if let last = lastCtrlReleaseTime, now.timeIntervalSince(last) < 0.4 {
                 lastCtrlReleaseTime = nil
                 DispatchQueue.main.async { [weak self] in
                     self?.dictationManager.toggleRecording()
@@ -241,34 +341,51 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 lastCtrlReleaseTime = now
             }
-        } else {
             ctrlPressedAlone = false
+        } else if !ctrl {
+            ctrlPressedAlone = false
+        }
+
+        // --- Double-tap Shift (pause/resume) ---
+        let shiftOthers = [ctrl, opt, cmd, capsLock].contains(true)
+        if shift {
+            shiftPressedAlone = !shiftOthers
+        } else if shiftPressedAlone && !shiftOthers {
+            let now = Date()
+            if let last = lastShiftReleaseTime, now.timeIntervalSince(last) < 0.4 {
+                lastShiftReleaseTime = nil
+                DispatchQueue.main.async { [weak self] in
+                    self?.dictationManager.togglePause()
+                }
+            } else {
+                lastShiftReleaseTime = now
+            }
+            shiftPressedAlone = false
+        } else if !shift {
+            shiftPressedAlone = false
         }
     }
 
     func registerEscapeMonitor() {
         escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 {
-                self?.dictationManager.cancelRecording()
+                self?.handleEscape()
             }
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 {
-                self?.dictationManager.cancelRecording()
+                self?.handleEscape()
                 return nil
             }
             return event
         }
     }
 
-    // MARK: - Panel Toggle
-
-    @objc func togglePanel() {
-        if floatingPanel.isVisible {
-            floatingPanel.orderOut(nil)
+    private func handleEscape() {
+        if dictationManager.state == .idle && dictationManager.showingResult {
+            dictationManager.dismissResult()
         } else {
-            positionPanel()
-            floatingPanel.orderFront(nil)
+            dictationManager.cancelRecording()
         }
     }
 }

@@ -8,6 +8,7 @@ enum DictationState {
     case idle
     case recording
     case liveTranscribing
+    case paused
     case transcribing
     case refining
 }
@@ -71,6 +72,7 @@ class DictationManager: ObservableObject {
     @Published var recordingDuration: TimeInterval = 0
     @Published var audioLevel: Float = 0
     @Published var livePartialText: String = ""
+    @Published var showingResult: Bool = false
 
     var onStateChange: ((DictationState) -> Void)?
 
@@ -82,6 +84,7 @@ class DictationManager: ObservableObject {
     private let liveTextInserter = LiveTextInserter()
 
     private var recordingTimer: Timer?
+    private var stateBeforePause: DictationState?
 
     init() {
         loadSettings()
@@ -104,24 +107,59 @@ class DictationManager: ObservableObject {
             startRecording()
         case .recording, .liveTranscribing:
             stopRecording()
+        case .paused:
+            stopRecording()
         default:
             break
         }
     }
 
+    func togglePause() {
+        switch state {
+        case .recording, .liveTranscribing:
+            stateBeforePause = state
+            audioRecorder.pauseRecording()
+            recordingTimer?.invalidate()
+            recordingTimer = nil
+            audioLevel = 0
+            setState(.paused)
+            playSound(.start)
+        case .paused:
+            guard let previousState = stateBeforePause else { return }
+            audioRecorder.resumeRecording()
+            // Resume timer without resetting duration
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                self?.recordingDuration += 1
+            }
+            setState(previousState)
+            stateBeforePause = nil
+            playSound(.start)
+        default:
+            break
+        }
+    }
+
+    func dismissResult() {
+        showingResult = false
+        onStateChange?(state)
+    }
+
     func cancelRecording() {
-        guard state == .recording || state == .liveTranscribing else { return }
+        guard state == .recording || state == .liveTranscribing || state == .paused else { return }
+
+        let wasLive = state == .liveTranscribing || stateBeforePause == .liveTranscribing
 
         stopRecordingTimer()
         audioRecorder.cancelRecording()
         realtimeService.disconnect()
 
-        if state == .liveTranscribing {
+        if wasLive {
             liveTextInserter.deleteAllInserted()
         }
 
         livePartialText = ""
         audioLevel = 0
+        stateBeforePause = nil
         setState(.idle)
         playSound(.error)
     }
@@ -194,24 +232,44 @@ class DictationManager: ObservableObject {
     }
 
     func stopRecording() {
-        guard state == .recording || state == .liveTranscribing else { return }
+        guard state == .recording || state == .liveTranscribing || state == .paused else { return }
 
-        let wasLive = state == .liveTranscribing
-        stopRecordingTimer()
+        let wasLive = state == .liveTranscribing || stateBeforePause == .liveTranscribing
+        stateBeforePause = nil
 
-        audioRecorder.stopRecording { [weak self] audioURL in
-            guard let self = self else { return }
+        if wasLive {
+            // Keep mic open briefly so trailing silence reaches the API,
+            // helping it detect end-of-speech and flush the final turn.
+            stopRecordingTimer()
+            setState(.transcribing)
 
-            self.realtimeService.disconnect()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self = self else { return }
 
-            if wasLive {
-                self.handleLiveRecordingComplete()
-            } else if let audioURL = audioURL {
-                self.setState(.transcribing)
-                self.processAudio(at: audioURL)
-            } else {
-                self.showError("Erro ao gravar áudio")
-                self.setState(.idle)
+                // Now stop the mic
+                self.audioRecorder.stopRecording { [weak self] _ in
+                    guard let self = self else { return }
+
+                    // Wait for the API to send back final transcription
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        self.realtimeService.disconnect()
+                        self.handleLiveRecordingComplete()
+                    }
+                }
+            }
+        } else {
+            stopRecordingTimer()
+            audioRecorder.stopRecording { [weak self] audioURL in
+                guard let self = self else { return }
+                self.realtimeService.disconnect()
+
+                if let audioURL = audioURL {
+                    self.setState(.transcribing)
+                    self.processAudio(at: audioURL)
+                } else {
+                    self.showError("Erro ao gravar áudio")
+                    self.setState(.idle)
+                }
             }
         }
     }
@@ -239,6 +297,7 @@ class DictationManager: ObservableObject {
 
                     await MainActor.run {
                         self.lastRefined = refined
+                        self.showingResult = true
                         self.addToHistory(original: liveText, refined: refined)
 
                         if self.autoPaste {
@@ -259,6 +318,7 @@ class DictationManager: ObservableObject {
                     await MainActor.run {
                         // Refinement failed - paste the live text as-is
                         self.lastRefined = liveText
+                        self.showingResult = true
                         self.addToHistory(original: liveText, refined: liveText)
 
                         if self.autoPaste {
@@ -276,6 +336,7 @@ class DictationManager: ObservableObject {
         } else {
             // No refinement - paste final text
             lastRefined = liveText
+            showingResult = true
             addToHistory(original: liveText, refined: liveText)
 
             if autoPaste {
@@ -315,6 +376,7 @@ class DictationManager: ObservableObject {
 
                 await MainActor.run {
                     self.lastRefined = finalText
+                    self.showingResult = true
                     self.addToHistory(original: transcription, refined: finalText)
 
                     if self.autoPaste {
@@ -346,7 +408,6 @@ class DictationManager: ObservableObject {
 
     private func pasteText(_ text: String) {
         let pasteboard = NSPasteboard.general
-        let previousContent = pasteboard.string(forType: .string)
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -361,13 +422,6 @@ class DictationManager: ObservableObject {
             let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
             keyUp?.flags = .maskCommand
             keyUp?.post(tap: .cghidEventTap)
-
-            if let previousContent = previousContent {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    pasteboard.clearContents()
-                    pasteboard.setString(previousContent, forType: .string)
-                }
-            }
         }
     }
 
@@ -493,7 +547,7 @@ extension DictationManager: RealtimeTranscriptionDelegate {
     func realtimeTranscription(didEncounterError error: Error) {
         NSLog("[Tachy] Transcription error: \(error.localizedDescription)")
         // Show error to user if we're actively transcribing
-        if state == .liveTranscribing {
+        if state == .liveTranscribing || state == .paused {
             showError("Erro de transcrição: \(error.localizedDescription)")
         }
 

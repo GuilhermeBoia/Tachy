@@ -1,360 +1,272 @@
 import SwiftUI
 
-// MARK: - Navigation
-
-enum TachyPage {
-    case main
-    case history
-    case settings
-}
-
-// MARK: - Root Panel View
+// MARK: - Root Panel View (State Router)
 
 struct TachyPanelView: View {
     @EnvironmentObject var dictationManager: DictationManager
-    @State private var currentPage: TachyPage = .main
 
     var body: some View {
         ZStack {
             VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
 
             Group {
-                switch currentPage {
-                case .main:
-                    TachyMainView(currentPage: $currentPage)
-                case .history:
-                    TachyHistoryView(currentPage: $currentPage)
-                case .settings:
-                    TachySettingsView(currentPage: $currentPage)
+                switch dictationManager.state {
+                case .recording, .liveTranscribing, .paused:
+                    CompactRecordingPill()
+                case .transcribing, .refining:
+                    ProcessingIndicator()
+                case .idle:
+                    if dictationManager.showingResult {
+                        ResultDisplayView()
+                    } else {
+                        Color.clear
+                    }
                 }
             }
-            .transition(.opacity.animation(.easeInOut(duration: 0.15)))
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.2), value: dictationManager.state)
+            .animation(.easeInOut(duration: 0.2), value: dictationManager.showingResult)
         }
         .environmentObject(dictationManager)
     }
 }
 
-// MARK: - Main View
+// MARK: - Compact Recording Pill (300x50)
 
-struct TachyMainView: View {
+struct CompactRecordingPill: View {
     @EnvironmentObject var dictationManager: DictationManager
-    @Binding var currentPage: TachyPage
-    @State private var lastResultCopied = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            header
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
+        HStack(spacing: 12) {
+            // Duration
+            Text(formattedDuration)
+                .font(.system(size: 14, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.9))
+                .frame(width: 48, alignment: .leading)
 
-            Divider().opacity(0.3)
-
-            // Content
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    // Record button
-                    recordButton
-
-                    // Live area / Status
-                    if isActiveRecording {
-                        liveArea
-                    } else if dictationManager.state == .transcribing || dictationManager.state == .refining {
-                        processingStatus
-                    }
-
-                    // Last result
-                    if !dictationManager.lastRefined.isEmpty && !isActiveRecording && dictationManager.state == .idle {
-                        lastResult
-                    }
-                }
-                .padding(16)
-            }
-
-            Divider().opacity(0.3)
-
-            // Footer
-            footer
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-        }
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "waveform.circle.fill")
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(
-                    isActiveRecording
-                        ? LinearGradient(colors: [.red, .orange], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        : LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
-
-            Text("Tachy")
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-
-            // Refinement picker inline
-            Picker("", selection: $dictationManager.refinementLevel) {
-                ForEach(RefinementLevel.allCases, id: \.self) { level in
-                    Text(level.displayName).tag(level)
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .scaleEffect(0.85, anchor: .leading)
-
-            Spacer()
-
-            statusPill
-        }
-    }
-
-    private var statusPill: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 6, height: 6)
-                .overlay(
-                    Circle()
-                        .fill(statusColor.opacity(0.4))
-                        .frame(width: 12, height: 12)
-                        .opacity(isActiveRecording ? 1 : 0)
-                        .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: isActiveRecording)
-                )
-
-            Text(statusLabel)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(statusColor.opacity(0.1))
-        .cornerRadius(10)
-    }
-
-    // MARK: - Record Button
-
-    private var recordButton: some View {
-        Button(action: { dictationManager.toggleRecording() }) {
-            HStack(spacing: 8) {
-                Image(systemName: buttonIcon)
-                    .font(.system(size: 14, weight: .semibold))
-                Text(buttonLabel)
-                    .font(.system(size: 13, weight: .semibold))
-                if isActiveRecording {
-                    Spacer()
-                    Text(formattedDuration)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.8))
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(
-                isActiveRecording
-                    ? AnyShapeStyle(LinearGradient(colors: [Color.red, Color.red.opacity(0.85)], startPoint: .leading, endPoint: .trailing))
-                    : AnyShapeStyle(LinearGradient(colors: [Color.blue, Color.purple.opacity(0.8)], startPoint: .leading, endPoint: .trailing))
+            // Waveform
+            AudioWaveformView(
+                audioLevel: dictationManager.audioLevel,
+                isPaused: dictationManager.state == .paused
             )
-            .foregroundColor(.white)
-            .cornerRadius(10)
-        }
-        .buttonStyle(.plain)
-        .disabled(dictationManager.state == .transcribing || dictationManager.state == .refining)
-    }
 
-    // MARK: - Live Area
-
-    private var liveArea: some View {
-        VStack(alignment: .leading, spacing: 8) {
-
-            // Live text — scrollable, no line limit
-            if !dictationManager.livePartialText.isEmpty {
-                Text(dictationManager.livePartialText)
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundColor(.primary.opacity(0.9))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(Color.primary.opacity(0.04))
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-                    )
+            // Pause/Play button
+            Button(action: { dictationManager.togglePause() }) {
+                Image(systemName: dictationManager.state == .paused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.9))
+                    .frame(width: 30, height: 30)
+                    .background(Color.white.opacity(0.15))
+                    .clipShape(Circle())
             }
-        }
-    }
+            .buttonStyle(.plain)
 
-    // MARK: - Processing Status
-
-    private var processingStatus: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .scaleEffect(0.65)
-            Text(statusText)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(Color.primary.opacity(0.03))
-        .cornerRadius(8)
-    }
-
-    // MARK: - Last Result
-
-    private var lastResult: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Último resultado")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button(action: {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(dictationManager.lastRefined, forType: .string)
-                    lastResultCopied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { lastResultCopied = false }
-                }) {
-                    Image(systemName: lastResultCopied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11))
-                        .foregroundColor(lastResultCopied ? .green : .secondary)
-                }
-                .buttonStyle(.plain)
+            // Stop button
+            Button(action: { dictationManager.toggleRecording() }) {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 30, height: 30)
+                    .background(Color.red.opacity(0.85))
+                    .clipShape(Circle())
             }
-
-            Text(dictationManager.lastRefined)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.primary.opacity(0.8))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Color.primary.opacity(0.04))
-                .cornerRadius(8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-                )
+            .buttonStyle(.plain)
         }
-    }
-
-    // MARK: - Footer
-
-    private var footer: some View {
-        HStack {
-            Text("2x ⌃")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundColor(.secondary.opacity(0.4))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(Color.primary.opacity(0.04))
-                .cornerRadius(4)
-
-            Spacer()
-
-            HStack(spacing: 16) {
-                Button("Histórico") {
-                    withAnimation(.easeInOut(duration: 0.15)) { currentPage = .history }
-                }
-                .font(.system(size: 11))
-                .buttonStyle(.plain)
-                .foregroundColor(.secondary)
-
-                Button("Ajustes") {
-                    withAnimation(.easeInOut(duration: 0.15)) { currentPage = .settings }
-                }
-                .font(.system(size: 11))
-                .buttonStyle(.plain)
-                .foregroundColor(.secondary)
-
-                Button("Sair") {
-                    NSApp.terminate(nil)
-                }
-                .font(.system(size: 11))
-                .buttonStyle(.plain)
-                .foregroundColor(.red.opacity(0.6))
-            }
-        }
-    }
-
-    // MARK: - Helpers
-
-    private var isActiveRecording: Bool {
-        dictationManager.state == .recording || dictationManager.state == .liveTranscribing
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var formattedDuration: String {
-        let minutes = Int(dictationManager.recordingDuration) / 60
-        let seconds = Int(dictationManager.recordingDuration) % 60
-        return String(format: "%02d:%02d", minutes, seconds)
+        let total = Int(dictationManager.recordingDuration)
+        let minutes = total / 60
+        let seconds = total % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
+}
 
-    private var statusColor: Color {
-        switch dictationManager.state {
-        case .idle: return .green
-        case .recording, .liveTranscribing: return .red
-        case .transcribing: return .orange
-        case .refining: return .purple
+// MARK: - Audio Waveform View
+
+struct AudioWaveformView: View {
+    let audioLevel: Float
+    let isPaused: Bool
+
+    private let barCount = 30
+    private let barWidth: CGFloat = 3
+    private let barSpacing: CGFloat = 2
+    private let maxBarHeight: CGFloat = 24
+    private let minBarHeight: CGFloat = 2
+
+    @State private var levels: [Float] = Array(repeating: 0, count: 30)
+    @State private var timer: Timer?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: barSpacing) {
+            ForEach(0..<barCount, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Color.white.opacity(0.7))
+                    .frame(
+                        width: barWidth,
+                        height: barHeight(for: levels[index])
+                    )
+                    .animation(.linear(duration: 0.05), value: levels[index])
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { startSampling() }
+        .onDisappear { stopSampling() }
+        .onChange(of: isPaused) { paused in
+            if paused {
+                stopSampling()
+            } else {
+                startSampling()
+            }
         }
     }
 
-    private var statusLabel: String {
-        switch dictationManager.state {
-        case .idle: return "Pronto"
-        case .recording: return "Gravando"
-        case .liveTranscribing: return "Ao Vivo"
-        case .transcribing: return "Transcrevendo"
-        case .refining: return "Refinando"
+    private func barHeight(for level: Float) -> CGFloat {
+        let normalized = CGFloat(max(0, min(1, level)))
+        return minBarHeight + normalized * (maxBarHeight - minBarHeight)
+    }
+
+    private func startSampling() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            DispatchQueue.main.async {
+                // Shift left, push new sample
+                var newLevels = levels
+                newLevels.removeFirst()
+                // Add some randomness to make it look natural
+                let base = audioLevel
+                let jitter = Float.random(in: -0.05...0.05)
+                newLevels.append(max(0, min(1, base + jitter)))
+                levels = newLevels
+            }
         }
     }
 
-    private var buttonIcon: String {
-        switch dictationManager.state {
-        case .idle: return "mic.fill"
-        case .recording, .liveTranscribing: return "stop.fill"
-        case .transcribing: return "waveform"
-        case .refining: return "sparkles"
-        }
+    private func stopSampling() {
+        timer?.invalidate()
+        timer = nil
     }
+}
 
-    private var buttonLabel: String {
-        switch dictationManager.state {
-        case .idle: return "Iniciar Gravação"
-        case .recording, .liveTranscribing: return "Parar"
-        case .transcribing: return "Transcrevendo..."
-        case .refining: return "Refinando..."
+// MARK: - Processing Indicator (300x50)
+
+struct ProcessingIndicator: View {
+    @EnvironmentObject var dictationManager: DictationManager
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .scaleEffect(0.7)
+                .progressViewStyle(CircularProgressViewStyle(tint: .white.opacity(0.8)))
+
+            Text(statusText)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.85))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var statusText: String {
         switch dictationManager.state {
-        case .transcribing: return "Transcrevendo com Whisper..."
-        case .refining: return "Refinando com GPT..."
-        default: return ""
+        case .transcribing: return "Transcrevendo..."
+        case .refining: return "Refinando..."
+        default: return "Processando..."
         }
     }
 }
 
-// MARK: - History View
+// MARK: - Result Display View (380 x dynamic)
+
+struct ResultDisplayView: View {
+    @EnvironmentObject var dictationManager: DictationManager
+    @State private var showCopiedBadge = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Top bar
+            HStack {
+                if showCopiedBadge {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Copiado")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundColor(.green)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+
+                Spacer()
+
+                Button(action: { dictationManager.dismissResult() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.white.opacity(0.4))
+                        .frame(width: 22, height: 22)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Result text
+            ScrollView {
+                Text(dictationManager.lastRefined)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.9))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .preference(key: ResultHeightKey.self, value: geo.size.height)
+                        }
+                    )
+            }
+            .frame(maxHeight: 280)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .onPreferenceChange(ResultHeightKey.self) { height in
+            // Total height = text height + top bar (~20) + padding (24) + scroll chrome
+            let totalHeight = height + 60
+            NotificationCenter.default.post(
+                name: Notification.Name("TachyResultHeightChanged"),
+                object: nil,
+                userInfo: ["height": totalHeight]
+            )
+        }
+        .onAppear {
+            showCopiedBadge = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    showCopiedBadge = false
+                }
+            }
+        }
+    }
+}
+
+private struct ResultHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+// MARK: - History View (Standalone Window)
 
 struct TachyHistoryView: View {
     @EnvironmentObject var dictationManager: DictationManager
-    @Binding var currentPage: TachyPage
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header with back
+            // Header
             HStack(spacing: 8) {
-                Button { withAnimation(.easeInOut(duration: 0.15)) { currentPage = .main } } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-
                 Text("Histórico")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
 
                 Spacer()
 
@@ -443,7 +355,6 @@ struct HistoryRow: View {
         )
     }
 
-    /// Relative time without seconds — "agora", "2 min", "1 h", "3 dias"
     private func relativeTime(_ date: Date) -> String {
         let interval = Date().timeIntervalSince(date)
         if interval < 60 { return "agora" }
@@ -453,156 +364,6 @@ struct HistoryRow: View {
         if hours < 24 { return "\(hours) h" }
         let days = hours / 24
         return "\(days) dia\(days > 1 ? "s" : "")"
-    }
-}
-
-// MARK: - Settings View (Inline)
-
-struct TachySettingsView: View {
-    @EnvironmentObject var dictationManager: DictationManager
-    @Binding var currentPage: TachyPage
-    @State private var openAIKey: String = ""
-    @State private var showOpenAIKey = false
-    @State private var launchAtLogin = false
-    @State private var savedMessage: String? = nil
-
-    private let settings = SettingsManager.shared
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header with back
-            HStack(spacing: 8) {
-                Button { withAnimation(.easeInOut(duration: 0.15)) { currentPage = .main } } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-
-                Text("Ajustes")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-
-            Divider().opacity(0.3)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Behavior
-                    settingsSection("Comportamento") {
-                        settingsRow {
-                            Toggle("Transcrição ao vivo", isOn: $dictationManager.useLiveTranscription)
-                                .font(.system(size: 12))
-                        }
-                        settingsRow {
-                            Toggle("Colar no campo ativo", isOn: $dictationManager.autoPaste)
-                                .font(.system(size: 12))
-                        }
-                        settingsRow {
-                            Toggle("Notificações", isOn: $dictationManager.showNotifications)
-                                .font(.system(size: 12))
-                        }
-                    }
-
-                    // API Keys
-                    settingsSection("API Keys") {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("OpenAI (Whisper + Realtime + GPT)")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(.secondary)
-                            HStack(spacing: 6) {
-                                if showOpenAIKey {
-                                    TextField("sk-...", text: $openAIKey)
-                                        .textFieldStyle(.roundedBorder)
-                                        .font(.system(size: 11, design: .monospaced))
-                                } else {
-                                    SecureField("sk-...", text: $openAIKey)
-                                        .textFieldStyle(.roundedBorder)
-                                        .font(.system(size: 11))
-                                }
-                                Button { showOpenAIKey.toggle() } label: {
-                                    Image(systemName: showOpenAIKey ? "eye.slash" : "eye")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-
-                    // Shortcut info
-                    settingsSection("Atalho") {
-                        HStack {
-                            Text("Gravar / Parar")
-                                .font(.system(size: 12))
-                            Spacer()
-                            Text("2x ⌃")
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.primary.opacity(0.06))
-                                .cornerRadius(5)
-                        }
-                    }
-
-                    // Save
-                    Button(action: saveAll) {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 12))
-                            Text(savedMessage ?? "Salvar tudo")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(
-                            savedMessage != nil
-                                ? AnyShapeStyle(Color.green.opacity(0.2))
-                                : AnyShapeStyle(LinearGradient(colors: [.blue, .purple.opacity(0.8)], startPoint: .leading, endPoint: .trailing))
-                        )
-                        .foregroundColor(savedMessage != nil ? .green : .white)
-                        .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(16)
-            }
-        }
-        .onAppear {
-            openAIKey = settings.openAIKey
-            launchAtLogin = settings.launchAtLogin
-        }
-    }
-
-    private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(.secondary.opacity(0.5))
-                .tracking(0.5)
-
-            VStack(spacing: 6) {
-                content()
-            }
-            .padding(10)
-            .background(Color.primary.opacity(0.03))
-            .cornerRadius(8)
-        }
-    }
-
-    private func settingsRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-    }
-
-    private func saveAll() {
-        settings.openAIKey = openAIKey
-        dictationManager.saveSettings()
-        savedMessage = "Salvo!"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { savedMessage = nil }
     }
 }
 

@@ -6,6 +6,7 @@ class AudioRecorder: NSObject {
     private var audioFile: AVAudioFile?
     private var audioFileURL: URL?
     private(set) var isRecording = false
+    private(set) var isPaused = false
 
     /// Callback for live audio data (PCM 24kHz mono 16-bit)
     var onAudioData: ((Data) -> Void)?
@@ -134,6 +135,22 @@ class AudioRecorder: NSObject {
         }
     }
 
+    func pauseRecording() {
+        guard isRecording, !isPaused else { return }
+        audioEngine?.pause()
+        isPaused = true
+    }
+
+    func resumeRecording() {
+        guard isRecording, isPaused, let engine = audioEngine else { return }
+        do {
+            try engine.start()
+            isPaused = false
+        } catch {
+            print("Failed to resume audio engine: \(error)")
+        }
+    }
+
     func stopRecording(completion: @escaping (URL?) -> Void) {
         guard isRecording else {
             completion(nil)
@@ -145,6 +162,7 @@ class AudioRecorder: NSObject {
         audioEngine = nil
         audioFile = nil
         isRecording = false
+        isPaused = false
         onAudioData = nil
         onAudioLevel = nil
         completion(audioFileURL)
@@ -156,6 +174,7 @@ class AudioRecorder: NSObject {
         audioEngine = nil
         audioFile = nil
         isRecording = false
+        isPaused = false
         onAudioData = nil
         onAudioLevel = nil
 
