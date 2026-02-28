@@ -34,6 +34,11 @@ mkdir -p "${APP_DIR}/Resources"
 echo "==> Copying binary..."
 cp "${BUILD_DIR}/${APP_NAME}" "${APP_DIR}/MacOS/${APP_NAME}"
 
+echo "==> Generating app icon..."
+swift scripts/generate_icon.swift
+cp AppIcon.icns "${APP_DIR}/Resources/AppIcon.icns"
+rm -f AppIcon.icns
+
 echo "==> Copying Info.plist..."
 cp "Tachy/Info.plist" "${APP_DIR}/Info.plist"
 

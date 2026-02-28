@@ -132,6 +132,7 @@ struct SettingsView: View {
             .foregroundColor(selectedTab == tab ? .white : .primary.opacity(0.65))
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
+            .contentShape(Rectangle())
             .background(
                 Group {
                     if selectedTab == tab {

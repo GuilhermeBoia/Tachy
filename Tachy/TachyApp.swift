@@ -247,33 +247,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func updateIcon(for state: DictationState) {
         guard let button = statusItem.button else { return }
 
-        let color: NSColor
         switch state {
         case .idle:
-            button.image = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: "Ready")
-            button.image?.isTemplate = true
-            button.contentTintColor = nil
-            return
-        case .recording, .liveTranscribing:
-            color = .systemRed
-        case .paused:
-            color = .systemYellow
-        case .transcribing:
-            color = .systemOrange
-        }
+            let img = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: "Tachy")
+            img?.isTemplate = true
+            button.image = img
 
-        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        if let img = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(config) {
-            let coloredImg = NSImage(size: img.size, flipped: false) { rect in
-                color.set()
-                img.draw(in: rect)
-                return true
-            }
-            coloredImg.isTemplate = false
-            button.image = coloredImg
+        case .recording, .liveTranscribing:
+            applyColoredIcon(to: button, color: .systemRed)
+
+        case .paused:
+            applyColoredIcon(to: button, color: .systemYellow)
+
+        case .transcribing:
+            applyColoredIcon(to: button, color: .systemOrange)
         }
-        button.contentTintColor = nil
+    }
+
+    /// Renders the SF Symbol tinted with the given color using `.sourceAtop` compositing,
+    /// then sets it as a non-template image so macOS displays it as-is in both light and dark menu bars.
+    private func applyColoredIcon(to button: NSStatusBarButton, color: NSColor) {
+        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+        guard let base = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: "Tachy")?
+            .withSymbolConfiguration(config) else { return }
+
+        let tinted = NSImage(size: base.size, flipped: false) { rect in
+            base.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        tinted.isTemplate = false
+        button.image = tinted
     }
 
     // MARK: - Hotkeys
