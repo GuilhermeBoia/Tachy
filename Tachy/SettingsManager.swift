@@ -16,14 +16,6 @@ class SettingsManager {
 
     // MARK: - Settings (stored in UserDefaults)
 
-    var refinementLevel: RefinementLevel? {
-        get {
-            guard let raw = defaults.string(forKey: "refinement_level") else { return nil }
-            return RefinementLevel.fromStoredValue(raw)
-        }
-        set { defaults.set(newValue?.rawValue, forKey: "refinement_level") }
-    }
-
     var autoPaste: Bool {
         get { defaults.object(forKey: "auto_paste") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "auto_paste") }

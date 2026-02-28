@@ -90,7 +90,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var localFlagsMonitor: Any?
     var escapeMonitor: Any?
     var settingsWindow: NSWindow?
-    var historyWindow: NSWindow?
 
     // Double-tap Control detection (toggle recording)
     private var lastCtrlReleaseTime: Date?
@@ -143,7 +142,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 floatingPanel.orderFront(nil)
             }
 
-        case .transcribing, .refining:
+        case .transcribing:
             // Keep pill visible
             floatingPanel.resizePanel(to: NSSize(width: 300, height: 50), cornerRadius: 25, animate: true)
             if !floatingPanel.isVisible {
@@ -190,11 +189,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showMenu() {
         let menu = NSMenu()
 
-        let historyItem = NSMenuItem(title: "Histórico", action: #selector(openHistory), keyEquivalent: "")
-        historyItem.target = self
-        menu.addItem(historyItem)
-
-        let settingsItem = NSMenuItem(title: "Ajustes", action: #selector(openSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: "Ajustes", action: #selector(openSettings), keyEquivalent: "")
         settingsItem.target = self
         menu.addItem(settingsItem)
 
@@ -212,34 +207,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func openHistory() {
-        if let window = historyWindow, window.isVisible {
+    @objc private func openSettings() {
+        if let window = settingsWindow, window.isVisible {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
 
-        let historyView = TachyHistoryView()
+        let settingsView = SettingsView()
             .environmentObject(dictationManager)
-            .frame(minWidth: 380, minHeight: 400)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 520),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Histórico — Tachy"
-        window.contentView = NSHostingView(rootView: historyView)
+        window.title = "Tachy"
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: settingsView)
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        historyWindow = window
-    }
-
-    @objc private func openSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow = window
     }
 
     @objc private func quitApp() {
@@ -270,8 +260,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             color = .systemYellow
         case .transcribing:
             color = .systemOrange
-        case .refining:
-            color = .systemPurple
         }
 
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)

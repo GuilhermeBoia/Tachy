@@ -10,61 +10,13 @@ enum DictationState {
     case liveTranscribing
     case paused
     case transcribing
-    case refining
-}
-
-enum RefinementLevel: String, CaseIterable, Codable {
-    case none = "none"
-    case refine = "refine"
-    case prompt = "prompt"
-
-    var displayName: String {
-        switch self {
-        case .none:
-            return "Sem refinamento"
-        case .refine:
-            return "Refinamento"
-        case .prompt:
-            return "Prompt técnico"
-        }
-    }
-
-    // Backward compatibility with old stored labels/cases.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let value = try container.decode(String.self)
-        if let mapped = Self.fromStoredValue(value) {
-            self = mapped
-        } else {
-            self = .refine
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(rawValue)
-    }
-
-    static func fromStoredValue(_ value: String) -> RefinementLevel? {
-        switch value {
-        case "none", "Sem refinamento":
-            return RefinementLevel.none
-        case "refine", "Refinamento", "Leve (pontuação e clareza)", "Moderado (reescrita leve)":
-            return .refine
-        case "prompt", "Prompt técnico":
-            return .prompt
-        default:
-            return nil
-        }
-    }
 }
 
 class DictationManager: ObservableObject {
     @Published var state: DictationState = .idle
     @Published var lastTranscription: String = ""
-    @Published var lastRefined: String = ""
+    @Published var lastResult: String = ""
     @Published var isEnabled: Bool = true
-    @Published var refinementLevel: RefinementLevel = .refine
     @Published var showNotifications: Bool = true
     @Published var autoPaste: Bool = true
     @Published var useLiveTranscription: Bool = true
@@ -78,10 +30,10 @@ class DictationManager: ObservableObject {
 
     private let audioRecorder = AudioRecorder()
     private let whisperService = WhisperService()
-    private let refinementService = RefinementService()
     private let settingsManager = SettingsManager.shared
     private let realtimeService = RealtimeTranscriptionService()
     private let liveTextInserter = LiveTextInserter()
+    private var completedTurnTexts: [String] = []
 
     private var recordingTimer: Timer?
     private var stateBeforePause: DictationState?
@@ -156,6 +108,7 @@ class DictationManager: ObservableObject {
         if wasLive {
             liveTextInserter.deleteAllInserted()
         }
+        completedTurnTexts = []
 
         livePartialText = ""
         audioLevel = 0
@@ -185,6 +138,7 @@ class DictationManager: ObservableObject {
 
         liveTextInserter.reset()
         livePartialText = ""
+        completedTurnTexts = []
 
         // Connect WebSocket FIRST, then start recording only after connection is established.
         realtimeService.onConnected = { [weak self] in
@@ -277,82 +231,42 @@ class DictationManager: ObservableObject {
     // MARK: - Live Recording Complete
 
     private func handleLiveRecordingComplete() {
-        let liveText = liveTextInserter.allText
+        let baseText: String
+        if completedTurnTexts.isEmpty {
+            baseText = liveTextInserter.allText
+        } else {
+            baseText = completedTurnTexts.joined(separator: " ")
+        }
+        let finalText = cleanTranscript(baseText)
 
-        if liveText.isEmpty {
+        if finalText.isEmpty {
             setState(.idle)
             return
         }
 
-        lastTranscription = liveText
+        lastTranscription = finalText
 
-        if refinementLevel != .none {
-            // Delete live text, refine, paste refined version
-            setState(.refining)
-            liveTextInserter.deleteAllInserted()
+        // Remove provisional live insertion and replace with final cleaned text.
+        liveTextInserter.deleteAllInserted()
 
-            Task {
-                do {
-                    let refined = try await refinementService.refine(text: liveText, level: refinementLevel)
+        lastResult = finalText
+        showingResult = true
+        addToHistory(original: finalText, result: finalText)
 
-                    await MainActor.run {
-                        self.lastRefined = refined
-                        self.showingResult = true
-                        self.addToHistory(original: liveText, refined: refined)
-
-                        if self.autoPaste {
-                            self.pasteText(refined)
-                        } else {
-                            self.copyToClipboard(refined)
-                        }
-
-                        self.playSound(.complete)
-                        self.setState(.idle)
-                        self.livePartialText = ""
-
-                        if self.showNotifications {
-                            self.showNotification(text: refined)
-                        }
-                    }
-                } catch {
-                    await MainActor.run {
-                        // Refinement failed - paste the live text as-is
-                        self.lastRefined = liveText
-                        self.showingResult = true
-                        self.addToHistory(original: liveText, refined: liveText)
-
-                        if self.autoPaste {
-                            self.pasteText(liveText)
-                        } else {
-                            self.copyToClipboard(liveText)
-                        }
-
-                        self.showError("Refinamento falhou: \(error.localizedDescription)")
-                        self.setState(.idle)
-                        self.livePartialText = ""
-                    }
-                }
-            }
+        if autoPaste {
+            pasteText(finalText)
         } else {
-            // No refinement - paste final text
-            lastRefined = liveText
-            showingResult = true
-            addToHistory(original: liveText, refined: liveText)
-
-            if autoPaste {
-                pasteText(liveText)
-            } else {
-                copyToClipboard(liveText)
-            }
-
-            playSound(.complete)
-            setState(.idle)
-            livePartialText = ""
-
-            if showNotifications {
-                showNotification(text: liveText)
-            }
+            copyToClipboard(finalText)
         }
+
+        playSound(.complete)
+        setState(.idle)
+        livePartialText = ""
+
+        if showNotifications {
+            showNotification(text: finalText)
+        }
+        completedTurnTexts = []
     }
 
     // MARK: - Batch Processing
@@ -361,23 +275,16 @@ class DictationManager: ObservableObject {
         Task {
             do {
                 let transcription = try await whisperService.transcribe(audioURL: url)
+                let finalText = cleanTranscript(transcription)
 
                 await MainActor.run {
-                    self.lastTranscription = transcription
-                }
-
-                let finalText: String
-                if refinementLevel != .none {
-                    await MainActor.run { self.setState(.refining) }
-                    finalText = try await refinementService.refine(text: transcription, level: refinementLevel)
-                } else {
-                    finalText = transcription
+                    self.lastTranscription = finalText
                 }
 
                 await MainActor.run {
-                    self.lastRefined = finalText
+                    self.lastResult = finalText
                     self.showingResult = true
-                    self.addToHistory(original: transcription, refined: finalText)
+                    self.addToHistory(original: finalText, result: finalText)
 
                     if self.autoPaste {
                         self.pasteText(finalText)
@@ -448,13 +355,12 @@ class DictationManager: ObservableObject {
 
     // MARK: - History
 
-    private func addToHistory(original: String, refined: String) {
+    private func addToHistory(original: String, result: String) {
         let entry = DictationEntry(
             id: UUID(),
             date: Date(),
             original: original,
-            refined: refined,
-            refinementLevel: refinementLevel
+            refined: result
         )
         history.insert(entry, at: 0)
         if history.count > 50 { history.removeLast() }
@@ -511,19 +417,36 @@ class DictationManager: ObservableObject {
     }
 
     private func loadSettings() {
-        if let level = settingsManager.refinementLevel {
-            refinementLevel = level
-        }
         autoPaste = settingsManager.autoPaste
         showNotifications = settingsManager.showNotifications
         useLiveTranscription = settingsManager.useLiveTranscription
     }
 
     func saveSettings() {
-        settingsManager.refinementLevel = refinementLevel
         settingsManager.autoPaste = autoPaste
         settingsManager.showNotifications = showNotifications
         settingsManager.useLiveTranscription = useLiveTranscription
+    }
+
+    private func cleanTranscript(_ text: String) -> String {
+        let collapsed = text.replacingOccurrences(
+            of: #"\s+"#,
+            with: " ",
+            options: .regularExpression
+        )
+        let withoutFillers = collapsed.replacingOccurrences(
+            of: #"(?i)(^|[\s,.;:!?()\-\u2014])(?:hum+|ahn+|ah+|eh+|uh+|né+|tipo)(?=$|[\s,.;:!?()\-\u2014])"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        let deduplicatedWords = withoutFillers.replacingOccurrences(
+            of: #"(?i)\b([\p{L}\p{N}_'-]+)\b(?:\s+\1\b)+"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        return deduplicatedWords
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -537,6 +460,10 @@ extension DictationManager: RealtimeTranscriptionDelegate {
 
     func realtimeTranscription(didCompleteTurn text: String) {
         liveTextInserter.commitTurn()
+        let finalTurnText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !finalTurnText.isEmpty {
+            completedTurnTexts.append(finalTurnText)
+        }
         // Keep livePartialText as-is — it shows ALL accumulated text in the panel.
         // Add a space separator so the next turn doesn't merge with the previous one.
         if !livePartialText.isEmpty && !livePartialText.hasSuffix(" ") {
@@ -565,5 +492,4 @@ struct DictationEntry: Identifiable, Codable {
     let date: Date
     let original: String
     let refined: String
-    let refinementLevel: RefinementLevel
 }

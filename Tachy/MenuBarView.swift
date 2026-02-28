@@ -13,7 +13,7 @@ struct TachyPanelView: View {
                 switch dictationManager.state {
                 case .recording, .liveTranscribing, .paused:
                     CompactRecordingPill()
-                case .transcribing, .refining:
+                case .transcribing:
                     ProcessingIndicator()
                 case .idle:
                     if dictationManager.showingResult {
@@ -171,7 +171,6 @@ struct ProcessingIndicator: View {
     private var statusText: String {
         switch dictationManager.state {
         case .transcribing: return "Transcrevendo..."
-        case .refining: return "Refinando..."
         default: return "Processando..."
         }
     }
@@ -213,7 +212,7 @@ struct ResultDisplayView: View {
 
             // Result text
             ScrollView {
-                Text(dictationManager.lastRefined)
+                Text(dictationManager.lastResult)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundColor(.white.opacity(0.9))
                     .frame(maxWidth: .infinity, alignment: .leading)

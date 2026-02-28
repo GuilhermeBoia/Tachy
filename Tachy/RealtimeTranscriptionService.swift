@@ -119,13 +119,28 @@ class RealtimeTranscriptionService: NSObject, URLSessionWebSocketDelegate {
     // MARK: - Internal
 
     private func configureSession() {
+        let transcriptionPrompt = """
+        Você está transcrevendo fala para virar um prompt de IA.
+        Regras:
+        - Preserve o significado exato do que foi dito.
+        - Não adicione informações novas e não invente detalhes.
+        - Remova vícios de fala e hesitações (ex.: "hum", "ahn", "tipo", "é...", "né", "vamos lá").
+        - Números não devem ser escritos por extenso, devem ser escritos como números.
+        - Remova repetições imediatas de palavras e trechos duplicados.
+        - Mantenha termos técnicos exatamente como falados (ex.: API, endpoint, React, useState).
+        - Mantenha o idioma original de cada trecho (pt-BR e inglês quando aparecer).
+        - Entregue texto claro, direto e natural para ser usado como prompt de IA.
+        - Retorne apenas a transcrição final.
+        """
+
         let config: [String: Any] = [
             "type": "transcription_session.update",
             "session": [
                 "input_audio_format": "pcm16",
                 "input_audio_transcription": [
                     "model": "gpt-4o-mini-transcribe",
-                    "language": "pt"
+                    "language": "pt",
+                    "prompt": transcriptionPrompt
                 ],
                 "turn_detection": [
                     "type": "server_vad",
